@@ -4,69 +4,94 @@ import pymysql;
 import time;
 import json;
 
-class Db():
+class DbMysql():
 
-    def __init__(self, config = {}):
-        self.config = config;
+    __obj = None;
+    __init_flag = True;
+
+    # Singleton
+    def __new__(cls, *args, **kwargs):
+        if cls.__obj == None:
+            cls.__obj = object.__new__(cls);
+        return cls.__obj;
+
+    """
+    init mysql config
+    -----------------
+    config (dict): {hostname, database, username, password, hostport, prefix}
+    """
+    def __init__(self, config):
+        if self.__init_flag:
+            connect = self.connect(config);
+            self.__init_flag = False;
+
+    """
+    result fun
+    -----------------
+    data (int|str|dict|list)
+    code (int) : status code
+    msg  (str) : tips info
+    """
+    def result(self, data = "", code = 0, msg = "success"):
+        result = {
+            "code": code,
+            "msg": msg,
+            "time": int(time.time()),
+            "data": data
+        }
+        return result;
 
     # connect mysql server
-    def connect(self):
-        self.conn = pymysql.connect(
-            host = self.config['hostname'],
-            port = self.config['hostport'],
-            user = self.config['username'],
-            passwd = self.config['password'],
-            db = self.config['database'],
-            charset = 'utf8',
-            cursorclass = pymysql.cursors.DictCursor
-        );
-        self.cursor = self.conn.cursor();
+    def connect(self, config):
+        try:
+            conn = pymysql.connect(
+                host = config['hostname'],
+                port = config['hostport'],
+                user = config['username'],
+                passwd = config['password'],
+                db = config['database'],
+                charset = 'utf8',
+                cursorclass = pymysql.cursors.DictCursor,
+            );
+            cursor = conn.cursor();
+            self.conn = conn;
+            self.cursor = cursor;
+            return self.result(True, 0, "conn mysql server success");
+        except Exception as e:
+            raise Exception(self.result(None, 1, e));
 
     # close mysql server
     def close(self):
         self.cursor.close();
         self.conn.close();
 
-    # result fun
-    def result(self, data = "", code = 0, msg = "success"):
-        result = {
-            "code": code,
-            "msg": msg,
-            "time": int(time.time()),
-            "data:": data
-        }
-        return result;
-
     # search all data
     def select(self, sql):
         try:
-            self.connect();
             self.cursor.execute(sql);
             data = self.cursor.fetchall();
-            self.close();
+            # self.close();
         except Exception as e:
-            return self.result(None, 1, e.message);
+            return self.result(sql, 1, e);
 
         return self.result(data);
 
     # search one data
     def find(self, sql):
         try:
-            self.connect();
             self.cursor.execute(sql);
             data = self.cursor.fetchone();
-            self.close();
+            # self.close();
         except Exception as e:
-            return self.result(None, 1, e);
+            return self.result(sql, 1, e);
 
         return self.result(data);
 
-    def save(self, table, data):
-        if "id" in data:
-            return self.update(table, data);
-
+    # handle add data
+    def handleAddData(self, data):
         data['create_time'] = int(time.time());
         data['update_time'] = int(time.time());
+
         data_k = '';
         data_v = '';
         for k in data:
@@ -75,20 +100,15 @@ class Db():
                 data[k] = json.dumps(data[k], ensure_ascii=False);
             data_v += "'" + str(data[k]) + "', ";
 
-        sql = "insert into {0} ({1}) value ({2})".format(table, data_k[:-2], data_v[:-2]);
+        result = {
+            "key": data_k[:-2],
+            "val": data_v[:-2],
+        };
 
-        try:
-            self.connect();
-            self.cursor.execute(sql);
-            insert_id = self.conn.insert_id();
-            self.conn.commit();
-            self.close();
-        except Exception as e:
-            return self.result(sql, 1, e);
+        return result;
 
-        return self.result(insert_id);
-
-    def update(self, table, data):
+    # handle update data
+    def handleUpdateData(self, data):
         data['update_time'] = int(time.time());
         data_v = '';
         for k in data:
@@ -98,14 +118,45 @@ class Db():
                 data_v += k + '=';
                 data_v += "'" + str(data[k]) + "', ";
 
-        sql = "update {0} set {1} where id = {2}".format(table, data_v[:-2], data['id']);
+        return data_v[:-2];
+
+    # save or update data
+    def save(self, table, data):
+        if not isinstance(table, str):
+            return self.result(None, 1, 'table name must be a string');
+        if not isinstance(data, dict):
+            return self.result(None, 1, 'data must be a dict');
+
+        if "id" in data:
+            return self.update(table, data);
+
+        data_result = self.handleAddData(data);
+        field = data_result['key'];
+        value = data_result['val'];
+
+        sql = "insert into {0} ({1}) value ({2})".format(table, field, value);
 
         try:
-            self.connect();
             self.cursor.execute(sql);
+            insert_id = self.conn.insert_id();
             self.conn.commit();
-            self.close();
+            # self.close();
         except Exception as e:
             return self.result(sql, 1, e);
 
-        return self.result(data);
+        return self.result(insert_id, 0, 'add data success');
+
+    # update data
+    def update(self, table, data):
+        data_result = self.handleUpdateData(data);
+
+        sql = "update {0} set {1} where id = {2}".format(table, data_result, data['id']);
+
+        try:
+            self.cursor.execute(sql);
+            self.conn.commit();
+            # self.close();
+        except Exception as e:
+            return self.result(sql, 1, e);
+
+        return self.result(sql, 0, 'update data success');
